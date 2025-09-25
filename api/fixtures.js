@@ -1,4 +1,8 @@
 // api/fixtures.js
+// Vercel Serverless Function — PlayHQ proxy with CORS.
+// Reads upstream body once (as text), then safely JSON.parse's it.
+// Env: PLAYHQ_API_KEY
+
 export default async function handler(req, res) {
   // CORS
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -28,13 +32,15 @@ export default async function handler(req, res) {
       },
     });
 
-    // Try JSON first, then fall back to text so we never hide upstream errors
-    let body;
-    let asText = null;
+    // Read ONCE as text
+    const raw = await playhqRes.text();
+
+    // Try to parse JSON from raw
+    let parsed = null;
     try {
-      body = await playhqRes.json();
-    } catch {
-      asText = await playhqRes.text();
+      parsed = raw ? JSON.parse(raw) : null;
+    } catch (_) {
+      // not JSON; leave parsed as null
     }
 
     if (debug) {
@@ -44,24 +50,30 @@ export default async function handler(req, res) {
         upstreamUrl,
         upstreamStatus: playhqRes.status,
         upstreamOk: playhqRes.ok,
-        // Return whichever we managed to parse
-        body: body ?? null,
-        text: asText ?? null,
+        // If JSON parsed, show it; otherwise show raw text
+        body: parsed ?? raw ?? null,
       });
       return;
     }
 
-    // Normal path
     res.setHeader("Cache-Control", "s-maxage=300, stale-while-revalidate=600");
 
     if (!playhqRes.ok) {
-      res
-        .status(playhqRes.status)
-        .json({ error: "Upstream error", status: playhqRes.status, body: body ?? asText });
+      res.status(playhqRes.status).json({
+        error: "Upstream error",
+        status: playhqRes.status,
+        body: parsed ?? raw ?? null,
+      });
       return;
     }
 
-    res.status(200).json(body ?? { ok: true, note: "Empty response body" });
+    // Successful path
+    if (parsed !== null) {
+      res.status(200).json(parsed);
+    } else {
+      // Upstream said OK but body wasn't JSON; still return something
+      res.status(200).json({ ok: true, note: "Non-JSON upstream body", body: raw });
+    }
   } catch (err) {
     res.status(500).json({ error: "Proxy error", message: err?.message || String(err) });
   }
