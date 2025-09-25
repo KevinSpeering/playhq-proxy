@@ -1,6 +1,4 @@
-// api/grade-fixtures.js
-// Proxy to PlayHQ External API: Grade -> Games (fixtures/results)
-
+// Proxy: Grade -> Games (fixtures/results)
 export default async function handler(req, res) {
   // CORS
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -8,47 +6,41 @@ export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Methods", "GET,OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 
-  if (req.method === "OPTIONS") {
-    res.status(204).end();
-    return;
-  }
+  if (req.method === "OPTIONS") return res.status(204).end();
 
   const { gradeId, cursor } = req.query;
-  if (!gradeId) {
-    res.status(400).json({ error: "Missing gradeId query param." });
-    return;
+  if (!gradeId) return res.status(400).json({ error: "Missing gradeId query param." });
+
+  // (Optional) early guard for UUID
+  const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  if (!UUID_RE.test(gradeId)) {
+    return res.status(400).json({ error: "Invalid gradeId (must be UUID from External API)" });
   }
 
   try {
-    const url = new URL("https://api.playhq.com/v1/grades/" + gradeId + "/games");
+    const url = new URL(`https://api.playhq.com/v1/grades/${gradeId}/games`);
     if (cursor) url.searchParams.set("cursor", cursor);
 
     const upstream = await fetch(url.toString(), {
+      method: "GET",
       headers: {
-        "x-api-key": process.env.PLAYHQ_API_KEY,        // REQUIRED
-        "x-phq-tenant": "ca",                           // Cricket Australia tenant
+        "x-api-key": process.env.PLAYHQ_API_KEY,
+        "x-phq-tenant": "ca",
         "accept": "application/json"
-      },
-      // no body, it's a GET
-      method: "GET"
+      }
     });
 
-    // cache at edge for 5m for stability
     res.setHeader("Cache-Control", "s-maxage=300, stale-while-revalidate=600");
 
-    const text = await upstream.text(); // safely read once
+    const text = await upstream.text(); // read once (safe)
     if (!upstream.ok) {
-      res
+      return res
         .status(upstream.status)
         .json({ error: "Upstream error", status: upstream.status, body: text });
-      return;
     }
 
-    // pass JSON through
     res.status(200).send(text);
   } catch (err) {
-    res
-      .status(500)
-      .json({ error: "Proxy error", message: err?.message || String(err) });
+    res.status(500).json({ error: "Proxy error", message: err?.message || String(err) });
   }
 }
