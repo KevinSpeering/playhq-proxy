@@ -1,4 +1,6 @@
-// Proxy: Grade -> Games (fixtures/results)
+// api/grade-fixtures.js
+import { GRADES, normaliseToUuid } from "../lib/ids.js";
+
 export default async function handler(req, res) {
   // CORS
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -8,39 +10,49 @@ export default async function handler(req, res) {
 
   if (req.method === "OPTIONS") return res.status(204).end();
 
-  const { gradeId, cursor } = req.query;
-  if (!gradeId) return res.status(400).json({ error: "Missing gradeId query param." });
+  const { gradeId, debug, cursor } = req.query;
 
-  // (Optional) early guard for UUID
-  const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-  if (!UUID_RE.test(gradeId)) {
-    return res.status(400).json({ error: "Invalid gradeId (must be UUID from External API)" });
+  const gradeUuid =
+    normaliseToUuid(gradeId, GRADES, GRADES) // checks UUID, short, or code
+    || normaliseToUuid(gradeId, GRADES, null);
+
+  if (!gradeUuid) {
+    return res.status(400).json({
+      error: "Invalid gradeId",
+      message: "Provide a grade UUID, short id (8 hex), or code (A2/B1/LO1/LO4).",
+    });
   }
 
   try {
-    const url = new URL(`https://api.playhq.com/v1/grades/${gradeId}/games`);
+    const url = new URL(`https://api.playhq.com/v1/grades/${gradeUuid}/games`);
     if (cursor) url.searchParams.set("cursor", cursor);
 
     const upstream = await fetch(url.toString(), {
-      method: "GET",
       headers: {
         "x-api-key": process.env.PLAYHQ_API_KEY,
         "x-phq-tenant": "ca",
-        "accept": "application/json"
-      }
+        accept: "application/json",
+      },
     });
 
+    const text = await upstream.text();
     res.setHeader("Cache-Control", "s-maxage=300, stale-while-revalidate=600");
 
-    const text = await upstream.text(); // read once (safe)
     if (!upstream.ok) {
-      return res
-        .status(upstream.status)
-        .json({ error: "Upstream error", status: upstream.status, body: text });
+      return res.status(upstream.status).json({
+        error: "Upstream error",
+        status: upstream.status,
+        ...(debug ? { url: url.toString(), body: text } : {}),
+      });
     }
 
-    res.status(200).send(text);
+    try {
+      const json = text ? JSON.parse(text) : {};
+      return res.status(200).json(json);
+    } catch {
+      return res.status(200).send(text);
+    }
   } catch (err) {
-    res.status(500).json({ error: "Proxy error", message: err?.message || String(err) });
+    return res.status(500).json({ error: "Proxy error", message: String(err) });
   }
 }
