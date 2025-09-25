@@ -1,6 +1,6 @@
 // api/fixtures-graphql.js
 // GraphQL proxy for PlayHQ fixtures (CORS-safe for Wix).
-// Env required: PLAYHQ_API_KEY, PLAYHQ_GRAPHQL_URL
+// Requires env: PLAYHQ_API_KEY, PLAYHQ_GRAPHQL_URL, PLAYHQ_TENANT
 
 const QUERY = `
   query TeamFixtures($teamId: ID!, $seasonId: ID!) {
@@ -47,7 +47,7 @@ const QUERY = `
 `;
 
 export default async function handler(req, res) {
-  // CORS
+  // CORS for Wix/browser
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Vary", "Origin");
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
@@ -63,10 +63,12 @@ export default async function handler(req, res) {
     res.status(400).json({ error: "Missing teamId query param." });
     return;
   }
-  // Default to Summer 2025/26 (from your paste)
-  const season = seasonId || "9dc3827d";
 
+  // Default from your data: Summer 2025/26
+  const season = seasonId || "9dc3827d";
   const url = process.env.PLAYHQ_GRAPHQL_URL;
+  const tenant = process.env.PLAYHQ_TENANT || "cricket-australia";
+
   if (!url) {
     res.status(500).json({ error: "Missing PLAYHQ_GRAPHQL_URL env var" });
     return;
@@ -76,13 +78,21 @@ export default async function handler(req, res) {
     const upstreamRes = await fetch(url, {
       method: "POST",
       headers: {
+        // Required by PlayHQ CloudFront
+        "origin": "https://www.playhq.com",
+        "tenant": tenant,
+
+        // Auth/API key
         "x-api-key": process.env.PLAYHQ_API_KEY,
+
+        // Normal headers
         "Content-Type": "application/json",
+        "Accept": "application/json",
+        // Optional hardening (sometimes helps CDNs)
+        "Referrer": "https://www.playhq.com/",
+        "User-Agent": "playhq-proxy/1.0 (Vercel serverless)",
       },
-      body: JSON.stringify({
-        query: QUERY,
-        variables: { teamId, seasonId: season },
-      }),
+      body: JSON.stringify({ query: QUERY, variables: { teamId, seasonId: season } }),
     });
 
     const raw = await upstreamRes.text();
@@ -96,6 +106,7 @@ export default async function handler(req, res) {
         upstreamStatus: upstreamRes.status,
         upstreamOk: upstreamRes.ok,
         url,
+        sentHeaders: { origin: "https://www.playhq.com", tenant },
         body: parsed ?? raw ?? null,
       });
       return;
