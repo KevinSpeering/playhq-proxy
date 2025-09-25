@@ -1,7 +1,6 @@
 // api/fixtures-graphql.js
-// GraphQL proxy for PlayHQ. Requires:
-// - PLAYHQ_GRAPHQL_URL (full URL you copied from DevTools)
-// - PLAYHQ_API_KEY (same key; used as x-api-key by default)
+// GraphQL proxy for PlayHQ fixtures (CORS-safe for Wix).
+// Env required: PLAYHQ_API_KEY, PLAYHQ_GRAPHQL_URL
 
 const QUERY = `
   query TeamFixtures($teamId: ID!, $seasonId: ID!) {
@@ -10,6 +9,7 @@ const QUERY = `
       id
       name
       fixture {
+        byes { id }
         games {
           id
           date
@@ -19,8 +19,19 @@ const QUERY = `
           away { id name }
           allocation {
             time
+            dateTimeList { date time }
             court {
-              venue { name suburb state postcode country }
+              id
+              name
+              venue {
+                id
+                name
+                suburb
+                state
+                postcode
+                country
+                address
+              }
             }
           }
           result {
@@ -39,7 +50,7 @@ export default async function handler(req, res) {
   // CORS
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Vary", "Origin");
-  res.setHeader("Access-Control-Allow-Methods", "POST,GET,OPTIONS");
+  res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 
   if (req.method === "OPTIONS") {
@@ -52,7 +63,8 @@ export default async function handler(req, res) {
     res.status(400).json({ error: "Missing teamId query param." });
     return;
   }
-  const season = seasonId || "9dc3827d"; // Summer 2025/26
+  // Default to Summer 2025/26 (from your paste)
+  const season = seasonId || "9dc3827d";
 
   const url = process.env.PLAYHQ_GRAPHQL_URL;
   if (!url) {
@@ -73,13 +85,9 @@ export default async function handler(req, res) {
       }),
     });
 
-    let json = null;
-    let text = null;
-    try {
-      json = await upstreamRes.json();
-    } catch {
-      text = await upstreamRes.text();
-    }
+    const raw = await upstreamRes.text();
+    let parsed = null;
+    try { parsed = raw ? JSON.parse(raw) : null; } catch {}
 
     if (debug) {
       res.setHeader("Cache-Control", "no-store");
@@ -88,8 +96,7 @@ export default async function handler(req, res) {
         upstreamStatus: upstreamRes.status,
         upstreamOk: upstreamRes.ok,
         url,
-        json,
-        text,
+        body: parsed ?? raw ?? null,
       });
       return;
     }
@@ -100,12 +107,12 @@ export default async function handler(req, res) {
       res.status(upstreamRes.status).json({
         error: "Upstream error",
         status: upstreamRes.status,
-        body: json ?? text,
+        body: parsed ?? raw ?? null,
       });
       return;
     }
 
-    res.status(200).json(json);
+    res.status(200).json(parsed ?? { ok: true, note: "Non-JSON upstream body", body: raw });
   } catch (err) {
     res.status(500).json({ error: "Proxy error", message: err?.message || String(err) });
   }
